@@ -7,12 +7,12 @@ package cs104
 import (
 	"context"
 	"crypto/tls"
+	"github.com/agile-edge/go-mod-core-contracts/v3/clients/logger"
 	"net"
 	"sync"
 	"time"
 
-	"github.com/thinkgos/go-iecp5/asdu"
-	"github.com/thinkgos/go-iecp5/clog"
+	"github.com/agile-edge/go-iecp5/asdu"
 )
 
 // timeoutResolution is seconds according to companion standard 104,
@@ -31,18 +31,18 @@ type Server struct {
 	listen         net.Listener
 	onConnection   func(asdu.Connect)
 	connectionLost func(asdu.Connect)
-	clog.Clog
-	wg sync.WaitGroup
+	logger         logger.LoggingClient
+	wg             sync.WaitGroup
 }
 
 // NewServer new a server, default config and default asdu.ParamsWide params
-func NewServer(handler ServerHandlerInterface) *Server {
+func NewServer(handler ServerHandlerInterface, lc logger.LoggingClient) *Server {
 	return &Server{
 		config:   DefaultConfig(),
 		params:   *asdu.ParamsWide,
 		handler:  handler,
 		sessions: make(map[*SrvSession]struct{}),
-		Clog:     clog.NewLogger("cs104 server => "),
+		logger:   lc,
 	}
 }
 
@@ -70,7 +70,7 @@ func (sf *Server) SetParams(p *asdu.Params) *Server {
 func (sf *Server) ListenAndServer(addr string) {
 	listen, err := net.Listen("tcp", addr)
 	if err != nil {
-		sf.Error("server run failed, %v", err)
+		sf.logger.Errorf("server run failed, %v", err)
 		return
 	}
 	sf.mux.Lock()
@@ -81,13 +81,13 @@ func (sf *Server) ListenAndServer(addr string) {
 	defer func() {
 		cancel()
 		_ = sf.Close()
-		sf.Debug("server stop")
+		sf.logger.Debugf("server stop")
 	}()
-	sf.Debug("server run")
+	sf.logger.Debugf("server run")
 	for {
 		conn, err := listen.Accept()
 		if err != nil {
-			sf.Error("server run failed, %v", err)
+			sf.logger.Errorf("server run failed, %v", err)
 			return
 		}
 
@@ -105,7 +105,7 @@ func (sf *Server) ListenAndServer(addr string) {
 
 				onConnection:   sf.onConnection,
 				connectionLost: sf.connectionLost,
-				Clog:           sf.Clog,
+				logger:         sf.logger,
 			}
 			sf.mux.Lock()
 			sf.sessions[sess] = struct{}{}

@@ -15,8 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/thinkgos/go-iecp5/asdu"
-	"github.com/thinkgos/go-iecp5/clog"
+	"github.com/agile-edge/go-iecp5/asdu"
+	"github.com/agile-edge/go-mod-core-contracts/v3/clients/logger"
 )
 
 const (
@@ -54,7 +54,7 @@ type Client struct {
 	isActive uint32
 
 	// 其他
-	clog.Clog
+	logger logger.LoggingClient
 
 	wg          sync.WaitGroup
 	ctx         context.Context
@@ -66,7 +66,7 @@ type Client struct {
 }
 
 // NewClient returns an IEC104 master,default config and default asdu.ParamsWide params
-func NewClient(handler ClientHandlerInterface, o *ClientOption) *Client {
+func NewClient(handler ClientHandlerInterface, o *ClientOption, lc logger.LoggingClient) *Client {
 	return &Client{
 		option:           *o,
 		handler:          handler,
@@ -74,7 +74,7 @@ func NewClient(handler ClientHandlerInterface, o *ClientOption) *Client {
 		sendASDU:         make(chan []byte, o.config.SendUnAckLimitK<<4),
 		rcvRaw:           make(chan []byte, o.config.RecvUnAckLimitW<<5),
 		sendRaw:          make(chan []byte, o.config.SendUnAckLimitK<<5), // may not block!
-		Clog:             clog.NewLogger("cs104 client => "),
+		logger:           lc,
 		onConnect:        func(*Client) {},
 		onConnectionLost: func(*Client) {},
 	}
@@ -96,7 +96,7 @@ func (sf *Client) SetConnectionLostHandler(f func(c *Client)) *Client {
 	return sf
 }
 
-// Start start the server,and return quickly,if it nil,the server will disconnected background,other failed
+// Start the server,and return quickly,if it nil,the server will disconnected background,other failed
 func (sf *Client) Start() error {
 	if sf.option.server == nil {
 		return errors.New("empty remote server")
@@ -108,6 +108,7 @@ func (sf *Client) Start() error {
 
 // Connect is
 func (sf *Client) running() {
+	lc := sf.logger
 	var ctx context.Context
 
 	sf.rwMux.Lock()
@@ -126,21 +127,21 @@ func (sf *Client) running() {
 		default:
 		}
 
-		sf.Debug("connecting server %+v", sf.option.server)
+		lc.Debugf("connecting server %+v", sf.option.server)
 		conn, err := openConnection(sf.option.server, sf.option.TLSConfig, sf.option.config.ConnectTimeout0)
 		if err != nil {
-			sf.Error("connect failed, %v", err)
+			lc.Errorf("connect failed, %v", err)
 			if !sf.option.autoReconnect {
 				return
 			}
 			time.Sleep(sf.option.reconnectInterval)
 			continue
 		}
-		sf.Debug("connect success")
+		lc.Debugf("connect success")
 		sf.conn = conn
 		sf.run(ctx)
 
-		sf.Debug("disconnected server %+v", sf.option.server)
+		lc.Debugf("disconnected server %+v", sf.option.server)
 		select {
 		case <-ctx.Done():
 			return
@@ -152,11 +153,12 @@ func (sf *Client) running() {
 }
 
 func (sf *Client) recvLoop() {
-	sf.Debug("recvLoop started")
+	lc := sf.logger
+	lc.Debugf("recvLoop started")
 	defer func() {
 		sf.cancel()
 		sf.wg.Done()
-		sf.Debug("recvLoop stopped")
+		lc.Debugf("recvLoop stopped")
 	}()
 
 	for {
@@ -167,15 +169,15 @@ func (sf *Client) recvLoop() {
 				// See: https://github.com/golang/go/issues/4373
 				if err != io.EOF && err != io.ErrClosedPipe ||
 					strings.Contains(err.Error(), "use of closed network connection") {
-					sf.Error("receive failed, %v", err)
+					lc.Errorf("receive failed, %v", err)
 					return
 				}
 				if e, ok := err.(net.Error); ok && !e.Temporary() {
-					sf.Error("receive failed, %v", err)
+					lc.Errorf("receive failed, %v", err)
 					return
 				}
 				if rdCnt == 0 && err == io.EOF {
-					sf.Error("remote connect closed, %v", err)
+					lc.Errorf("remote connect closed, %v", err)
 					return
 				}
 			}
@@ -200,7 +202,7 @@ func (sf *Client) recvLoop() {
 				}
 				if rdCnt == length {
 					apdu := rawData[:length]
-					sf.Debug("RX Raw[% x]", apdu)
+					lc.Debugf("RX Raw[% x]", apdu)
 					sf.rcvRaw <- apdu
 				}
 			}
@@ -209,29 +211,30 @@ func (sf *Client) recvLoop() {
 }
 
 func (sf *Client) sendLoop() {
-	sf.Debug("sendLoop started")
+	lc := sf.logger
+	lc.Debugf("sendLoop started")
 	defer func() {
 		sf.cancel()
 		sf.wg.Done()
-		sf.Debug("sendLoop stopped")
+		lc.Debugf("sendLoop stopped")
 	}()
 	for {
 		select {
 		case <-sf.ctx.Done():
 			return
 		case apdu := <-sf.sendRaw:
-			sf.Debug("TX Raw[% x]", apdu)
+			lc.Debugf("TX Raw[% x]", apdu)
 			for wrCnt := 0; len(apdu) > wrCnt; {
 				byteCount, err := sf.conn.Write(apdu[wrCnt:])
 				if err != nil {
 					// See: https://github.com/golang/go/issues/4373
 					if err != io.EOF && err != io.ErrClosedPipe ||
 						strings.Contains(err.Error(), "use of closed network connection") {
-						sf.Error("sendRaw failed, %v", err)
+						lc.Errorf("sendRaw failed, %v", err)
 						return
 					}
 					if e, ok := err.(net.Error); !ok || !e.Temporary() {
-						sf.Error("sendRaw failed, %v", err)
+						lc.Errorf("sendRaw failed, %v", err)
 						return
 					}
 					// temporary error may be recoverable
@@ -244,7 +247,8 @@ func (sf *Client) sendLoop() {
 
 // run is the big fat state machine.
 func (sf *Client) run(ctx context.Context) {
-	sf.Debug("run started!")
+	lc := sf.logger
+	lc.Debugf("run started!")
 	// before any thing make sure init
 	sf.cleanUp()
 
@@ -268,7 +272,7 @@ func (sf *Client) run(ctx context.Context) {
 	sf.stopDtActiveSendSince.Store(willNotTimeout)
 
 	sendSFrame := func(rcvSN uint16) {
-		sf.Debug("TX sFrame %v", sAPCI{rcvSN})
+		lc.Debugf("TX sFrame %v", sAPCI{rcvSN})
 		sf.sendRaw <- newSFrame(rcvSN)
 	}
 
@@ -283,7 +287,7 @@ func (sf *Client) run(ctx context.Context) {
 		sf.seqNoSend = (seqNo + 1) & 32767
 		sf.pending = append(sf.pending, seqPending{seqNo & 32767, time.Now()})
 
-		sf.Debug("TX iFrame %v", iAPCI{seqNo, sf.seqNoRcv})
+		lc.Debugf("TX iFrame %v", iAPCI{seqNo, sf.seqNoRcv})
 		sf.sendRaw <- iframe
 	}
 
@@ -295,7 +299,7 @@ func (sf *Client) run(ctx context.Context) {
 		_ = sf.conn.Close() // 连锁引发cancel
 		sf.wg.Wait()
 		sf.onConnectionLost(sf)
-		sf.Debug("run stopped!")
+		lc.Debugf("run stopped!")
 	}()
 
 	sf.onConnect(sf)
@@ -319,7 +323,7 @@ func (sf *Client) run(ctx context.Context) {
 			if now.Sub(testFrAliveSendSince) >= sf.option.config.SendUnAckTimeout1 ||
 				now.Sub(sf.startDtActiveSendSince.Load().(time.Time)) >= sf.option.config.SendUnAckTimeout1 ||
 				now.Sub(sf.stopDtActiveSendSince.Load().(time.Time)) >= sf.option.config.SendUnAckTimeout1 {
-				sf.Error("test frame alive confirm timeout t₁")
+				lc.Errorf("test frame alive confirm timeout t₁")
 				return
 			}
 			// check oldest unacknowledged outbound
@@ -327,7 +331,7 @@ func (sf *Client) run(ctx context.Context) {
 				//now.Sub(sf.peek()) >= sf.SendUnAckTimeout1 {
 				now.Sub(sf.pending[0].sendTime) >= sf.option.config.SendUnAckTimeout1 {
 				sf.ackNoSend++
-				sf.Error("fatal transmission timeout t₁")
+				lc.Errorf("fatal transmission timeout t₁")
 				return
 			}
 
@@ -351,20 +355,20 @@ func (sf *Client) run(ctx context.Context) {
 			apci, asduVal := parse(apdu)
 			switch head := apci.(type) {
 			case sAPCI:
-				sf.Debug("RX sFrame %v", head)
+				lc.Debugf("RX sFrame %v", head)
 				if !sf.updateAckNoOut(head.rcvSN) {
-					sf.Error("fatal incoming acknowledge either earlier than previous or later than sendTime")
+					lc.Errorf("fatal incoming acknowledge either earlier than previous or later than sendTime")
 					return
 				}
 
 			case iAPCI:
-				sf.Debug("RX iFrame %v", head)
+				lc.Debugf("RX iFrame %v", head)
 				if atomic.LoadUint32(&sf.isActive) == inactive {
-					sf.Warn("station not active")
+					lc.Warnf("station not active")
 					break // not active, discard apdu
 				}
 				if !sf.updateAckNoOut(head.rcvSN) || head.sendSN != sf.seqNoRcv {
-					sf.Error("fatal incoming acknowledge either earlier than previous or later than sendTime")
+					lc.Errorf("fatal incoming acknowledge either earlier than previous or later than sendTime")
 					return
 				}
 
@@ -380,7 +384,7 @@ func (sf *Client) run(ctx context.Context) {
 				}
 
 			case uAPCI:
-				sf.Debug("RX uFrame %v", head)
+				lc.Debugf("RX uFrame %v", head)
 				switch head.function {
 				//case uStartDtActive:
 				//	sf.sendUFrame(uStartDtConfirm)
@@ -399,7 +403,7 @@ func (sf *Client) run(ctx context.Context) {
 				case uTestFrConfirm:
 					testFrAliveSendSince = willNotTimeout
 				default:
-					sf.Error("illegal U-Frame functions[0x%02x] ignored", head.function)
+					lc.Errorf("illegal U-Frame functions[0x%02x] ignored", head.function)
 				}
 			}
 		}
@@ -407,10 +411,11 @@ func (sf *Client) run(ctx context.Context) {
 }
 
 func (sf *Client) handlerLoop() {
-	sf.Debug("handlerLoop started")
+	lc := sf.logger
+	lc.Debugf("handlerLoop started")
 	defer func() {
 		sf.wg.Done()
-		sf.Debug("handlerLoop stopped")
+		lc.Debugf("handlerLoop stopped")
 	}()
 
 	for {
@@ -420,11 +425,11 @@ func (sf *Client) handlerLoop() {
 		case rawAsdu := <-sf.rcvASDU:
 			asduPack := asdu.NewEmptyASDU(&sf.option.params)
 			if err := asduPack.UnmarshalBinary(rawAsdu); err != nil {
-				sf.Warn("asdu UnmarshalBinary failed,%+v", err)
+				lc.Warnf("asdu UnmarshalBinary failed,%+v", err)
 				continue
 			}
 			if err := sf.clientHandler(asduPack); err != nil {
-				sf.Warn("Falied handling I frame, error: %v", err)
+				lc.Warnf("Falied handling I frame, error: %v", err)
 			}
 		}
 	}
@@ -464,7 +469,8 @@ loop:
 }
 
 func (sf *Client) sendUFrame(which byte) {
-	sf.Debug("TX uFrame %v", uAPCI{which})
+	lc := sf.logger
+	lc.Debugf("TX uFrame %v", uAPCI{which})
 	sf.sendRaw <- newUFrame(which)
 }
 
@@ -496,13 +502,14 @@ func (sf *Client) IsConnected() bool {
 
 // clientHandler hand response handler
 func (sf *Client) clientHandler(asduPack *asdu.ASDU) error {
+	lc := sf.logger
 	defer func() {
 		if err := recover(); err != nil {
-			sf.Critical("client handler %+v", err)
+			lc.Errorf("client handler %+v", err)
 		}
 	}()
 
-	sf.Debug("ASDU %+v", asduPack)
+	lc.Debugf("ASDU %+v", asduPack)
 
 	switch asduPack.Identifier.Type {
 	case asdu.C_IC_NA_1: // InterrogationCmd
@@ -582,7 +589,7 @@ func (sf *Client) SendStopDt() {
 	sf.sendUFrame(uStopDtActive)
 }
 
-//InterrogationCmd wrap asdu.InterrogationCmd
+// InterrogationCmd wrap asdu.InterrogationCmd
 func (sf *Client) InterrogationCmd(coa asdu.CauseOfTransmission, ca asdu.CommonAddr, qoi asdu.QualifierOfInterrogation) error {
 	return asdu.InterrogationCmd(sf, coa, ca, qoi)
 }

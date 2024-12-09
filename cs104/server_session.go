@@ -6,6 +6,7 @@ package cs104
 
 import (
 	"context"
+	"github.com/agile-edge/go-mod-core-contracts/v3/clients/logger"
 	"io"
 	"net"
 	"strings"
@@ -13,8 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/thinkgos/go-iecp5/asdu"
-	"github.com/thinkgos/go-iecp5/clog"
+	"github.com/agile-edge/go-iecp5/asdu"
 )
 
 const (
@@ -47,7 +47,7 @@ type SrvSession struct {
 	status uint32
 	rwMux  sync.RWMutex
 
-	clog.Clog
+	logger logger.LoggingClient
 
 	onConnection   func(asdu.Connect)
 	connectionLost func(asdu.Connect)
@@ -59,11 +59,11 @@ type SrvSession struct {
 
 // RecvLoop feeds t.rcvRaw.
 func (sf *SrvSession) recvLoop() {
-	sf.Debug("recvLoop started!")
+	sf.logger.Debugf("recvLoop started!")
 	defer func() {
 		sf.cancel()
 		sf.wg.Done()
-		sf.Debug("recvLoop stopped!")
+		sf.logger.Debugf("recvLoop stopped!")
 	}()
 
 	for {
@@ -74,17 +74,17 @@ func (sf *SrvSession) recvLoop() {
 				// See: https://github.com/golang/go/issues/4373
 				if err != io.EOF && err != io.ErrClosedPipe ||
 					strings.Contains(err.Error(), "use of closed network connection") {
-					sf.Error("receive failed, %v", err)
+					sf.logger.Errorf("receive failed, %v", err)
 					return
 				}
 
 				if e, ok := err.(net.Error); ok && !e.Temporary() {
-					sf.Error("receive failed, %v", err)
+					sf.logger.Errorf("receive failed, %v", err)
 					return
 				}
 
 				if byteCount == 0 && err == io.EOF {
-					sf.Error("remote connect closed, %v", err)
+					sf.logger.Errorf("remote connect closed, %v", err)
 					return
 				}
 			}
@@ -109,7 +109,7 @@ func (sf *SrvSession) recvLoop() {
 				}
 				if rdCnt == length {
 					apdu := rawData[:length]
-					sf.Debug("RX Raw[% x]", apdu)
+					sf.logger.Debugf("RX Raw[% x]", apdu)
 					sf.rcvRaw <- apdu
 				}
 			}
@@ -119,11 +119,11 @@ func (sf *SrvSession) recvLoop() {
 
 // sendLoop drains t.sendTime.
 func (sf *SrvSession) sendLoop() {
-	sf.Debug("sendLoop started!")
+	sf.logger.Debugf("sendLoop started!")
 	defer func() {
 		sf.cancel()
 		sf.wg.Done()
-		sf.Debug("sendLoop stopped!")
+		sf.logger.Debugf("sendLoop stopped!")
 	}()
 
 	for {
@@ -131,18 +131,18 @@ func (sf *SrvSession) sendLoop() {
 		case <-sf.ctx.Done():
 			return
 		case apdu := <-sf.sendRaw:
-			sf.Debug("TX Raw[% x]", apdu)
+			sf.logger.Debugf("TX Raw[% x]", apdu)
 			for wrCnt := 0; len(apdu) > wrCnt; {
 				byteCount, err := sf.conn.Write(apdu[wrCnt:])
 				if err != nil {
 					// See: https://github.com/golang/go/issues/4373
 					if err != io.EOF && err != io.ErrClosedPipe ||
 						strings.Contains(err.Error(), "use of closed network connection") {
-						sf.Error("sendRaw failed, %v", err)
+						sf.logger.Errorf("sendRaw failed, %v", err)
 						return
 					}
 					if e, ok := err.(net.Error); !ok || !e.Temporary() {
-						sf.Error("sendRaw failed, %v", err)
+						sf.logger.Errorf("sendRaw failed, %v", err)
 						return
 					}
 					// temporary error may be recoverable
@@ -155,7 +155,7 @@ func (sf *SrvSession) sendLoop() {
 
 // run is the big fat state machine.
 func (sf *SrvSession) run(ctx context.Context) {
-	sf.Debug("run started!")
+	sf.logger.Debugf("run started!")
 	// before any thing make sure init
 	sf.cleanUp()
 
@@ -181,11 +181,11 @@ func (sf *SrvSession) run(ctx context.Context) {
 	// var stopDtActiveSendSince = willNotTimeout
 
 	sendSFrame := func(rcvSN uint16) {
-		sf.Debug("TX sFrame %v", sAPCI{rcvSN})
+		sf.logger.Debugf("TX sFrame %v", sAPCI{rcvSN})
 		sf.sendRaw <- newSFrame(rcvSN)
 	}
 	sendUFrame := func(which byte) {
-		sf.Debug("TX uFrame %v", uAPCI{which})
+		sf.logger.Debugf("TX uFrame %v", uAPCI{which})
 		sf.sendRaw <- newUFrame(which)
 	}
 
@@ -200,7 +200,7 @@ func (sf *SrvSession) run(ctx context.Context) {
 		sf.seqNoSend = (seqNo + 1) & 32767
 		sf.pending = append(sf.pending, seqPending{seqNo & 32767, time.Now()})
 
-		sf.Debug("TX iFrame %v", iAPCI{seqNo, sf.seqNoRcv})
+		sf.logger.Debugf("TX iFrame %v", iAPCI{seqNo, sf.seqNoRcv})
 		sf.sendRaw <- iframe
 	}
 	if sf.onConnection != nil {
@@ -214,7 +214,7 @@ func (sf *SrvSession) run(ctx context.Context) {
 		if sf.connectionLost != nil {
 			sf.connectionLost(sf)
 		}
-		sf.Debug("run stopped!")
+		sf.logger.Debugf("run stopped!")
 	}()
 
 	for {
@@ -237,7 +237,7 @@ func (sf *SrvSession) run(ctx context.Context) {
 			if now.Sub(testFrAliveSendSince) >= sf.config.SendUnAckTimeout1 {
 				// now.Sub(startDtActiveSendSince) >= t.SendUnAckTimeout1 ||
 				// now.Sub(stopDtActiveSendSince) >= t.SendUnAckTimeout1 ||
-				sf.Error("test frame alive confirm timeout t₁")
+				sf.logger.Errorf("test frame alive confirm timeout t₁")
 				return
 			}
 			// check oldest unacknowledged outbound
@@ -245,7 +245,7 @@ func (sf *SrvSession) run(ctx context.Context) {
 				//now.Sub(sf.peek()) >= sf.SendUnAckTimeout1 {
 				now.Sub(sf.pending[0].sendTime) >= sf.config.SendUnAckTimeout1 {
 				sf.ackNoSend++
-				sf.Error("fatal transmission timeout t₁")
+				sf.logger.Errorf("fatal transmission timeout t₁")
 				return
 			}
 
@@ -269,20 +269,20 @@ func (sf *SrvSession) run(ctx context.Context) {
 			apci, asduVal := parse(apdu)
 			switch head := apci.(type) {
 			case sAPCI:
-				sf.Debug("RX sFrame %v", head)
+				sf.logger.Debugf("RX sFrame %v", head)
 				if !sf.updateAckNoOut(head.rcvSN) {
-					sf.Error("fatal incoming acknowledge either earlier than previous or later than sendTime")
+					sf.logger.Errorf("fatal incoming acknowledge either earlier than previous or later than sendTime")
 					return
 				}
 
 			case iAPCI:
-				sf.Debug("RX iFrame %v", head)
+				sf.logger.Debugf("RX iFrame %v", head)
 				if !isActive {
-					sf.Warn("station not active")
+					sf.logger.Warnf("station not active")
 					break // not active, discard apdu
 				}
 				if !sf.updateAckNoOut(head.rcvSN) || head.sendSN != sf.seqNoRcv {
-					sf.Error("fatal incoming acknowledge either earlier than previous or later than sendTime")
+					sf.logger.Errorf("fatal incoming acknowledge either earlier than previous or later than sendTime")
 					return
 				}
 
@@ -298,7 +298,7 @@ func (sf *SrvSession) run(ctx context.Context) {
 				}
 
 			case uAPCI:
-				sf.Debug("RX uFrame %v", head)
+				sf.logger.Debugf("RX uFrame %v", head)
 				switch head.function {
 				case uStartDtActive:
 					sendUFrame(uStartDtConfirm)
@@ -317,7 +317,7 @@ func (sf *SrvSession) run(ctx context.Context) {
 				case uTestFrConfirm:
 					testFrAliveSendSince = willNotTimeout
 				default:
-					sf.Error("illegal U-Frame functions[0x%02x] ignored", head.function)
+					sf.logger.Errorf("illegal U-Frame functions[0x%02x] ignored", head.function)
 				}
 			}
 		}
@@ -326,10 +326,10 @@ func (sf *SrvSession) run(ctx context.Context) {
 
 // handlerLoop handler iFrame asdu
 func (sf *SrvSession) handlerLoop() {
-	sf.Debug("handlerLoop started")
+	sf.logger.Debugf("handlerLoop started")
 	defer func() {
 		sf.wg.Done()
-		sf.Debug("handlerLoop stopped")
+		sf.logger.Debugf("handlerLoop stopped")
 	}()
 
 	for {
@@ -339,11 +339,11 @@ func (sf *SrvSession) handlerLoop() {
 		case rawAsdu := <-sf.rcvASDU:
 			asduPack := asdu.NewEmptyASDU(sf.params)
 			if err := asduPack.UnmarshalBinary(rawAsdu); err != nil {
-				sf.Error("asdu UnmarshalBinary failed,%+v", err)
+				sf.logger.Errorf("asdu UnmarshalBinary failed,%+v", err)
 				continue
 			}
 			if err := sf.serverHandler(asduPack); err != nil {
-				sf.Error("serverHandler falied,%+v", err)
+				sf.logger.Errorf("serverHandler falied,%+v", err)
 			}
 		}
 	}
@@ -414,11 +414,11 @@ func (sf *SrvSession) updateAckNoOut(ackNo uint16) (ok bool) {
 func (sf *SrvSession) serverHandler(asduPack *asdu.ASDU) error {
 	defer func() {
 		if err := recover(); err != nil {
-			sf.Critical("server handler %+v", err)
+			sf.logger.Errorf("server handler %+v", err)
 		}
 	}()
 
-	sf.Debug("ASDU %+v", asduPack)
+	sf.logger.Debugf("ASDU %+v", asduPack)
 
 	switch asduPack.Identifier.Type {
 	case asdu.C_IC_NA_1: // InterrogationCmd

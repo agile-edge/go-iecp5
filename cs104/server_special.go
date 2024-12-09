@@ -7,12 +7,12 @@ package cs104
 import (
 	"context"
 	"errors"
+	"github.com/agile-edge/go-mod-core-contracts/v3/clients/logger"
 	"math/rand"
 	"sync/atomic"
 	"time"
 
-	"github.com/thinkgos/go-iecp5/asdu"
-	"github.com/thinkgos/go-iecp5/clog"
+	"github.com/agile-edge/go-iecp5/asdu"
 )
 
 // ServerSpecial server special interface
@@ -26,9 +26,6 @@ type ServerSpecial interface {
 
 	SetOnConnectHandler(f func(c asdu.Connect))
 	SetConnectionLostHandler(f func(c asdu.Connect))
-
-	LogMode(enable bool)
-	SetLogProvider(p clog.LogProvider)
 }
 
 type serverSpec struct {
@@ -38,7 +35,7 @@ type serverSpec struct {
 }
 
 // NewServerSpecial new special server
-func NewServerSpecial(handler ServerHandlerInterface, o *ClientOption) ServerSpecial {
+func NewServerSpecial(handler ServerHandlerInterface, o *ClientOption, lc logger.LoggingClient) ServerSpecial {
 	return &serverSpec{
 		SrvSession: SrvSession{
 			config:  &o.config,
@@ -49,8 +46,7 @@ func NewServerSpecial(handler ServerHandlerInterface, o *ClientOption) ServerSpe
 			sendASDU: make(chan []byte, 1024),
 			rcvRaw:   make(chan []byte, 1024),
 			sendRaw:  make(chan []byte, 1024), // may not block!
-
-			Clog: clog.NewLogger("cs104 serverSpec => "),
+			logger:   lc,
 		},
 		option: *o,
 	}
@@ -96,20 +92,20 @@ func (sf *serverSpec) running() {
 		default:
 		}
 
-		sf.Debug("connecting server %+v", sf.option.server)
+		sf.logger.Debugf("connecting server %+v", sf.option.server)
 		conn, err := openConnection(sf.option.server, sf.option.TLSConfig, sf.config.ConnectTimeout0)
 		if err != nil {
-			sf.Error("connect failed, %v", err)
+			sf.logger.Errorf("connect failed, %v", err)
 			if !sf.option.autoReconnect {
 				return
 			}
 			time.Sleep(sf.option.reconnectInterval)
 			continue
 		}
-		sf.Debug("connect success")
+		sf.logger.Debugf("connect success")
 		sf.conn = conn
 		sf.run(ctx)
-		sf.Debug("disconnected server %+v", sf.option.server)
+		sf.logger.Debugf("disconnected server %+v", sf.option.server)
 		select {
 		case <-ctx.Done():
 			return

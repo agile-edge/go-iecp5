@@ -2,10 +2,11 @@ package main
 
 import (
 	"fmt"
+	"github.com/agile-edge/go-mod-core-contracts/v3/clients/logger"
 	"time"
 
-	"github.com/thinkgos/go-iecp5/asdu"
-	"github.com/thinkgos/go-iecp5/cs104"
+	"github.com/agile-edge/go-iecp5/asdu"
+	"github.com/agile-edge/go-iecp5/cs104"
 )
 
 type myClient struct{}
@@ -20,9 +21,7 @@ func main() {
 
 	mycli := &myClient{}
 
-	client := cs104.NewClient(mycli, option)
-
-	client.LogMode(true)
+	client := cs104.NewClient(mycli, option, logger.NewClient("cs104_client", "DEBUG"))
 
 	client.SetOnConnectHandler(func(c *cs104.Client) {
 		c.SendStartDt() // 发送startDt激活指令

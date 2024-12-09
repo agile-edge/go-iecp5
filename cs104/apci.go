@@ -7,15 +7,17 @@ package cs104
 import (
 	"fmt"
 
-	"github.com/thinkgos/go-iecp5/asdu"
+	"github.com/agile-edge/go-iecp5/asdu"
 )
 
 const startFrame byte = 0x68 // 启动字符
 
 // APDU form Max size 255
-//      |              APCI                   |       ASDU         |
-//      | start | APDU length | control field |       ASDU         |
-//                       |          APDU field size(253)           |
+//
+//	|              APCI                   |       ASDU         |
+//	| start | APDU length | control field |       ASDU         |
+//	                 |          APDU field size(253)           |
+//
 // bytes|    1  |    1   |        4           |                    |
 const (
 	APCICtlFiledSize = 4 // control filed(4)
@@ -52,7 +54,7 @@ func (sf sAPCI) String() string {
 	return fmt.Sprintf("S[recvNO: %d]", sf.rcvSN)
 }
 
-//U帧 只含apci 未编号控制信息 unnumbered
+// U帧 只含apci 未编号控制信息 unnumbered
 type uAPCI struct {
 	function byte // bit8 测试确认
 }

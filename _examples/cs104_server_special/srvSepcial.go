@@ -1,14 +1,15 @@
 package main
 
 import (
+	"github.com/agile-edge/go-mod-core-contracts/v3/clients/logger"
 	"log"
 	"net/http"
 	"time"
 
 	_ "net/http/pprof"
 
-	"github.com/thinkgos/go-iecp5/asdu"
-	"github.com/thinkgos/go-iecp5/cs104"
+	"github.com/agile-edge/go-iecp5/asdu"
+	"github.com/agile-edge/go-iecp5/cs104"
 )
 
 func main() {
@@ -18,9 +19,7 @@ func main() {
 		panic(err)
 	}
 
-	srv := cs104.NewServerSpecial(&mysrv{}, option)
-
-	srv.LogMode(true)
+	srv := cs104.NewServerSpecial(&mysrv{}, option, logger.NewClient("cs104_server", "DEBUG"))
 
 	srv.SetOnConnectHandler(func(c asdu.Connect) {
 		_, _ = c.UnderlyingConn().Write([]byte{0x68, 0x0e, 0x00, 0x00, 0x00, 0x00, 0x46, 0x01, 0x04, 0x00, 0xa0, 0xaf, 0xbd, 0xd8, 0x0a, 0xf4})

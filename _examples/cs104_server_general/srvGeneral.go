@@ -1,22 +1,22 @@
 package main
 
 import (
+	"github.com/agile-edge/go-mod-core-contracts/v3/clients/logger"
 	"log"
 	"time"
 
-	"github.com/thinkgos/go-iecp5/asdu"
-	"github.com/thinkgos/go-iecp5/cs104"
+	"github.com/agile-edge/go-iecp5/asdu"
+	"github.com/agile-edge/go-iecp5/cs104"
 )
 
 func main() {
-	srv := cs104.NewServer(&mysrv{})
+	srv := cs104.NewServer(&mysrv{}, logger.NewClient("cs104_server", "DEBUG"))
 	srv.SetOnConnectionHandler(func(c asdu.Connect) {
 		log.Println("on connect")
 	})
 	srv.SetConnectionLostHandler(func(c asdu.Connect) {
 		log.Println("connect lost")
 	})
-	srv.LogMode(true)
 	// go func() {
 	// 	time.Sleep(time.Second * 20)
 	// 	log.Println("try ooooooo", err)
